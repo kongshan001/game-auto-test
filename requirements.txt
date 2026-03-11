@@ -1,0 +1,10 @@
+requests>=2.31.0
+openai>=1.12.0
+opencv-python>=4.9.0
+Pillow>=10.2.0
+mss>=9.0.1
+pydirectinput>=1.0.5
+pygetwindow>=0.0.9
+python-dotenv>=1.0.0
+easyocr>=1.7.0
+numpy>=1.26.0
