@@ -114,7 +114,9 @@ class GameAutoTester:
         self.decision_agent = DecisionAgent(
             glm_client=self.glm_client,
             test_case=self.config.test_case,
-            state_memory=self.state_memory
+            state_memory=self.state_memory,
+            use_react=True,
+            max_retry_same_action=3
         )
         
         self.logger.info(f"游戏窗口: {self.window_info.title}")
@@ -128,6 +130,9 @@ class GameAutoTester:
         """执行动作"""
         action_type = action.get("action")
         
+        # 记录AI的推理过程
+        reasoning = action.get("reasoning", "")
+        
         try:
             if action_type == "click":
                 target = action.get("target")
@@ -140,7 +145,7 @@ class GameAutoTester:
                 self.state_memory.add_action(
                     action="click",
                     target=str(target),
-                    description=action.get("description", ""),
+                    description=reasoning or f"点击目标: {target}",
                     success=success
                 )
                 return success
@@ -158,7 +163,7 @@ class GameAutoTester:
                 self.state_memory.add_action(
                     action="type",
                     target=str(target),
-                    description=f"输入: {text}",
+                    description=reasoning or f"输入: {text}",
                     success=success
                 )
                 return success
@@ -169,7 +174,7 @@ class GameAutoTester:
                 self.state_memory.add_action(
                     action="keypress",
                     target=key,
-                    description=f"按下{key}",
+                    description=reasoning or f"按下{key}",
                     success=success
                 )
                 return success
@@ -180,7 +185,7 @@ class GameAutoTester:
                 self.state_memory.add_action(
                     action="wait",
                     target=str(seconds),
-                    description=f"等待{seconds}秒",
+                    description=reasoning or f"等待{seconds}秒",
                     success=True
                 )
                 return True
@@ -202,7 +207,7 @@ class GameAutoTester:
                 self.state_memory.add_action(
                     action="assert",
                     target=condition,
-                    description=f"验证: {condition}",
+                    description=reasoning or f"验证: {condition}",
                     success=success
                 )
                 return success
@@ -213,7 +218,7 @@ class GameAutoTester:
                 self.state_memory.add_action(
                     action="done",
                     target="",
-                    description=f"测试完成: {reason}",
+                    description=reasoning or f"测试完成: {reason}",
                     success=success
                 )
                 return success
@@ -227,19 +232,20 @@ class GameAutoTester:
             self.state_memory.add_action(
                 action=action_type or "unknown",
                 target="",
-                description=str(e),
+                description=reasoning or str(e),
                 success=False,
                 error=str(e)
             )
             return False
     
     def run(self):
-        """运行测试"""
+        """运行测试 - ReAct推理模式"""
         try:
             self.initialize()
             
             step = 0
             max_steps = self.config.max_steps
+            consecutive_failures = 0
             
             while self.running and step < max_steps:
                 step += 1
@@ -250,21 +256,35 @@ class GameAutoTester:
                 # 捕获当前画面
                 screenshot = self.screen_capture.capture()
                 
-                # 保存截图
+                # 保存执行前截图
                 if self.config.save_screenshots:
                     self.screen_capture.capture_and_save(
                         step=step,
                         action="before"
                     )
                 
-                # 获取场景描述（可选，用于减少token）
+                # 构建画面描述（可选，用于减少token）
                 scene_description = None
                 
-                # 决策下一步动作
-                action = self.decision_agent.decide(
+                # ========== 决策阶段 ==========
+                # 让AI基于当前状态和历史上下文决策下一步
+                decision_result = self.decision_agent.decide(
                     image=screenshot,
-                    scene_description=scene_description
+                    scene_description=scene_description,
+                    ocr_engine=self.ocr_engine
                 )
+                
+                # 提取推理和动作
+                reasoning = decision_result.get("reasoning", "")
+                action = decision_result.get("action", {})
+                
+                # 记录AI推理过程
+                if reasoning:
+                    self.logger.info(f"AI推理: {reasoning}")
+                
+                # 记录警告
+                if decision_result.get("warning"):
+                    self.logger.warning(decision_result["warning"])
                 
                 self.logger.info(f"决策动作: {action}")
                 
@@ -273,16 +293,24 @@ class GameAutoTester:
                     self.logger.warning(f"动作格式无效: {action}")
                     action = {"action": "wait", "seconds": 1}
                 
-                # 执行动作
+                # ========== 执行阶段 ==========
                 success = self.execute_action(action)
                 
-                # 保存截图
+                # 记录连续失败次数
+                if not success:
+                    consecutive_failures += 1
+                    self.logger.warning(f"连续失败: {consecutive_failures}次")
+                else:
+                    consecutive_failures = 0
+                
+                # 保存执行后截图
                 if self.config.save_screenshots:
                     self.screen_capture.capture_and_save(
                         step=step,
                         action=action.get("action", "unknown")
                     )
                 
+                # ========== 状态检查 ==========
                 # 检查是否完成
                 if action.get("action") == "done":
                     self.logger.info(f"测试完成: {action.get('reason', '')}")
@@ -290,9 +318,12 @@ class GameAutoTester:
                     self.state_memory.end_test(success=action.get("success", True))
                     break
                 
-                # 检查动作是否失败
-                if not success:
-                    self.logger.warning("动作执行失败，可能需要重试")
+                # 检查连续失败是否过多
+                if consecutive_failures >= 5:
+                    self.logger.error("连续失败过多，可能是卡住了，尝试等待恢复")
+                    consecutive_failures = 0
+                    # 强制等待
+                    self.action_executor.wait(3)
                 
                 # 短暂等待让画面更新
                 time.sleep(1)
