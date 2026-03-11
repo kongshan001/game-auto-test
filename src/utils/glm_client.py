@@ -1,11 +1,23 @@
 """
-GLM API 客户端
+GLM API 客户端 - 带重试机制
 """
 import base64
 import io
+import time
+import logging
 from typing import Optional, List, Dict, Any
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 import requests
 from PIL import Image
+
+
+logger = logging.getLogger(__name__)
+
+
+class GLMAPIError(Exception):
+    """GLM API 错误"""
+    pass
 
 
 class GLMClient:
@@ -15,12 +27,32 @@ class GLMClient:
         self,
         api_key: str,
         model: str = "glm-4v",
-        base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+        base_url: str = "https://open.bigmodel.cn/api/paas/v4",
+        max_retries: int = 3,
+        backoff_factor: float = 0.5,
+        timeout: int = 30
     ):
+        if not api_key:
+            raise ValueError("API key is required")
+        
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
+        self.timeout = timeout
         self.url = f"{base_url}/chat/completions"
+        
+        # 配置请求会话和重试
+        self.session = requests.Session()
+        retry_strategy = Retry(
+            total=max_retries,
+            backoff_factor=backoff_factor,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
@@ -46,14 +78,22 @@ class GLMClient:
             "max_tokens": max_tokens
         }
 
-        response = requests.post(
-            self.url,
-            headers=self.headers,
-            json=payload,
-            timeout=30
-        )
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        try:
+            response = self.session.post(
+                self.url,
+                headers=self.headers,
+                json=payload,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+        except requests.exceptions.Timeout:
+            logger.error("API请求超时")
+            raise GLMAPIError("Request timeout")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API请求失败: {e}")
+            raise GLMAPIError(f"Request failed: {e}")
 
     def chat_with_image(
         self,
@@ -94,3 +134,13 @@ class GLMClient:
 
 {context}"""
         return self.chat_with_image(prompt, image)
+    
+    def close(self):
+        """关闭会话"""
+        self.session.close()
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()

@@ -1,9 +1,9 @@
 """
-动作执行模块
+动作执行模块 - 统一日志记录
 """
 import time
+import logging
 from typing import Optional, Tuple, Dict, Any, Union
-import pydirectinput
 from PIL import Image
 
 # 尝试导入win32api作为备用
@@ -13,6 +13,15 @@ try:
     HAS_WIN32 = True
 except ImportError:
     HAS_WIN32 = False
+
+try:
+    import pydirectinput
+    HAS_PYDIRECTINPUT = True
+except ImportError:
+    HAS_PYDIRECTINPUT = False
+
+
+logger = logging.getLogger(__name__)
 
 
 class ActionExecutor:
@@ -31,7 +40,8 @@ class ActionExecutor:
         self.keypress_delay = keypress_delay
         
         # 设置pydirectinput失败安全
-        pydirectinput.FAILSAFE = True
+        if HAS_PYDIRECTINPUT:
+            pydirectinput.FAILSAFE = True
         
     def _to_absolute(self, x: int, y: int) -> Tuple[int, int]:
         """将窗口内相对坐标转换为屏幕绝对坐标"""
@@ -44,6 +54,11 @@ class ActionExecutor:
         if self.window_info:
             return (x - self.window_info.left, y - self.window_info.top)
         return (x, y)
+    
+    def _check_available(self):
+        """检查输入模拟是否可用"""
+        if not HAS_PYDIRECTINPUT:
+            raise RuntimeError("pydirectinput不可用，请安装: pip install pydirectinput")
     
     def click(
         self,
@@ -64,6 +79,8 @@ class ActionExecutor:
         Returns:
             是否成功
         """
+        self._check_available()
+        
         try:
             # 获取坐标
             if isinstance(target, str):
@@ -71,7 +88,7 @@ class ActionExecutor:
                     raise ValueError("需要提供locator来定位文本目标")
                 coords = locator.get_element_center(image, target)
                 if coords is None:
-                    print(f"未找到目标: {target}")
+                    logger.warning(f"未找到目标: {target}")
                     return False
                 x, y = coords
             else:
@@ -89,10 +106,11 @@ class ActionExecutor:
                 pydirectinput.middleClick()
             
             time.sleep(self.click_delay)
+            logger.debug(f"点击成功: {target} at ({x}, {y})")
             return True
             
         except Exception as e:
-            print(f"点击失败: {e}")
+            logger.error(f"点击失败: {e}")
             return False
     
     def double_click(
@@ -102,12 +120,15 @@ class ActionExecutor:
         locator: Optional[Any] = None
     ) -> bool:
         """双击目标"""
+        self._check_available()
+        
         try:
             if isinstance(target, str):
                 if locator is None:
                     raise ValueError("需要提供locator来定位文本目标")
                 coords = locator.get_element_center(image, target)
                 if coords is None:
+                    logger.warning(f"未找到目标: {target}")
                     return False
                 x, y = coords
             else:
@@ -117,10 +138,11 @@ class ActionExecutor:
             time.sleep(0.1)
             pydirectinput.doubleClick()
             time.sleep(self.click_delay)
+            logger.debug(f"双击成功: {target}")
             return True
             
         except Exception as e:
-            print(f"双击失败: {e}")
+            logger.error(f"双击失败: {e}")
             return False
     
     def right_click(
@@ -150,6 +172,8 @@ class ActionExecutor:
             locator: 元素定位器
             clear_first: 是否先清除现有内容
         """
+        self._check_available()
+        
         try:
             # 如果有目标，先点击目标
             if target is not None:
@@ -168,10 +192,11 @@ class ActionExecutor:
                 pydirectinput.write(char)
                 time.sleep(self.type_delay)
             
+            logger.debug(f"输入文本成功: {text}")
             return True
             
         except Exception as e:
-            print(f"输入文本失败: {e}")
+            logger.error(f"输入文本失败: {e}")
             return False
     
     def press_key(self, key: str) -> bool:
@@ -181,12 +206,15 @@ class ActionExecutor:
         Args:
             key: 按键名称（如 "enter", "esc", "a" 等）
         """
+        self._check_available()
+        
         try:
             pydirectinput.press(key)
             time.sleep(self.keypress_delay)
+            logger.debug(f"按键成功: {key}")
             return True
         except Exception as e:
-            print(f"按键失败: {e}")
+            logger.error(f"按键失败: {e}")
             return False
     
     def press_keys(self, keys: list) -> bool:
@@ -196,17 +224,21 @@ class ActionExecutor:
         Args:
             keys: 按键列表（如 ["ctrl", "c"]）
         """
+        self._check_available()
+        
         try:
             pydirectinput.hotkey(*keys)
             time.sleep(self.keypress_delay)
+            logger.debug(f"组合按键成功: {keys}")
             return True
         except Exception as e:
-            print(f"组合按键失败: {e}")
+            logger.error(f"组合按键失败: {e}")
             return False
     
     def wait(self, seconds: float) -> bool:
         """等待指定秒数"""
         time.sleep(seconds)
+        logger.debug(f"等待 {seconds} 秒")
         return True
     
     def scroll(self, clicks: int, x: Optional[int] = None, y: Optional[int] = None) -> bool:
@@ -217,6 +249,8 @@ class ActionExecutor:
             clicks: 滚动量（正数向上，负数向下）
             x, y: 鼠标位置（可选）
         """
+        self._check_available()
+        
         try:
             if x is not None and y is not None:
                 pydirectinput.moveTo(x, y)
@@ -224,9 +258,10 @@ class ActionExecutor:
             
             pydirectinput.scroll(clicks)
             time.sleep(0.3)
+            logger.debug(f"滚动 {clicks} 格")
             return True
         except Exception as e:
-            print(f"滚动失败: {e}")
+            logger.error(f"滚动失败: {e}")
             return False
     
     def drag(
@@ -243,6 +278,8 @@ class ActionExecutor:
             end: 终点坐标
             duration: 拖拽持续时间（秒）
         """
+        self._check_available()
+        
         try:
             # 移动到起点
             pydirectinput.moveTo(start[0], start[1])
@@ -253,18 +290,20 @@ class ActionExecutor:
             
             # 移动到终点（分段移动使拖拽更平滑）
             steps = int(duration * 20)
-            dx = (end[0] - start[0]) / steps
-            dy = (end[1] - start[1]) / steps
-            
-            for _ in range(steps):
-                pydirectinput.move(int(dx), int(dy))
-                time.sleep(0.05)
+            if steps > 0:
+                dx = (end[0] - start[0]) / steps
+                dy = (end[1] - start[1]) / steps
+                
+                for _ in range(steps):
+                    pydirectinput.move(int(dx), int(dy))
+                    time.sleep(0.05)
             
             # 释放鼠标
             pydirectinput.mouseUp()
             time.sleep(0.2)
             
+            logger.debug(f"拖拽从 {start} 到 {end}")
             return True
         except Exception as e:
-            print(f"拖拽失败: {e}")
+            logger.error(f"拖拽失败: {e}")
             return False

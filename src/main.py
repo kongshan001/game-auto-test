@@ -21,11 +21,14 @@ from vision.element_locator import ElementLocator
 from action.input_executor import ActionExecutor
 from agents.decision_agent import DecisionAgent
 from agents.state_memory import StateMemory
-from agents.test_case_parser import TestCaseParser
 
 
 # 配置日志
 def setup_logging(log_level: str = "INFO"):
+    # 确保日志目录存在
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    
     logging.basicConfig(
         level=getattr(logging, log_level.upper()),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -41,7 +44,7 @@ class GameAutoTester:
     
     def __init__(self, config: Config):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(self.__class__.__name__)
         
         # 初始化各模块
         self.glm_client = GLMClient(
@@ -192,8 +195,9 @@ class GameAutoTester:
                     matches = self.ocr_engine.search_text(screenshot, condition)
                     success = len(matches) > 0
                 else:
-                    # 简单处理：认为断言成功
-                    success = True
+                    # OCR未启用时抛出警告
+                    self.logger.warning("OCR未启用，无法执行断言验证")
+                    success = False
                 
                 self.state_memory.add_action(
                     action="assert",
@@ -255,7 +259,6 @@ class GameAutoTester:
                 
                 # 获取场景描述（可选，用于减少token）
                 scene_description = None
-                # scene_description = self.glm_client.describe_scene(screenshot)
                 
                 # 决策下一步动作
                 action = self.decision_agent.decide(
@@ -264,6 +267,11 @@ class GameAutoTester:
                 )
                 
                 self.logger.info(f"决策动作: {action}")
+                
+                # 验证动作格式
+                if not self.decision_agent.validate_action(action):
+                    self.logger.warning(f"动作格式无效: {action}")
+                    action = {"action": "wait", "seconds": 1}
                 
                 # 执行动作
                 success = self.execute_action(action)
@@ -319,6 +327,10 @@ class GameAutoTester:
         if self.game_launcher.is_running():
             self.logger.info("关闭游戏...")
             self.game_launcher.close(force=True)
+        
+        # 关闭GLM客户端
+        if hasattr(self.glm_client, 'close'):
+            self.glm_client.close()
 
 
 def main():
