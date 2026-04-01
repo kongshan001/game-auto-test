@@ -216,10 +216,10 @@ class TestStateMemory:
         memory = StateMemory()
         memory.set_test_case("测试")
         memory.add_action("click", "按钮", "点击")
-        
+
         filepath = tmp_path / "test.json"
         memory.save_to_file(str(filepath))
-        
+
         assert filepath.exists()
-        content = filepath.read_text()
+        content = filepath.read_text(encoding="utf-8")
         assert "测试" in content

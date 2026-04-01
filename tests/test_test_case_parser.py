@@ -19,10 +19,10 @@ class TestTestCaseParser:
         assert "能点击" in result["goal"] or "开始按钮" in result["goal"]
     
     def test_extract_goal_no_keyword(self):
-        """测试无关键词时提取目标"""
+        """测试无关键词时提取目标——应返回原文"""
         result = TestCaseParser.parse("执行游戏任务")
-        
-        assert result["goal"] != ""
+
+        assert result["goal"] == "执行游戏任务"
     
     def test_extract_data_username(self):
         """测试提取用户名"""
@@ -52,9 +52,10 @@ class TestTestCaseParser:
     def test_extract_steps_type(self):
         """测试提取输入步骤"""
         result = TestCaseParser.parse("输入用户名'test'")
-        
-        steps = [s for s in result["steps"] if s["action"] == "type"]
-        # 可能没有type步骤，因为正则可能没匹配到
+
+        type_steps = [s for s in result["steps"] if s["action"] == "type"]
+        assert len(type_steps) >= 1
+        assert type_steps[0]["action"] == "type"
     
     def test_extract_assertions(self):
         """测试提取断言"""
